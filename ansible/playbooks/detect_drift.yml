@@ -1,0 +1,69 @@
+---
+- name: Configuration Drift Detection
+  hosts: all_servers
+  become: yes
+
+  vars:
+    node_exporter_version: "1.7.0"
+    node_exporter_install_dir: /usr/local/bin
+    node_exporter_port: 9100
+
+  tasks:
+
+    - name: Check node_exporter binary exists
+      ansible.builtin.stat:
+        path: "{{ node_exporter_install_dir }}/node_exporter"
+      register: binary_check
+
+    - name: DRIFT DETECTED - node_exporter binary missing
+      ansible.builtin.debug:
+        msg: "DRIFT: node_exporter binary not found on {{ inventory_hostname }}"
+      when: not binary_check.stat.exists
+
+    - name: Check node_exporter service is running
+      ansible.builtin.systemd:
+        name: node_exporter
+      register: service_check
+      ignore_errors: yes
+
+    - name: DRIFT DETECTED - node_exporter service not running
+      ansible.builtin.debug:
+        msg: "DRIFT: node_exporter service is {{ service_check.status.ActiveState }} on {{ inventory_hostname }}"
+      when: service_check.status.ActiveState != "active"
+
+    - name: Check SSH hardening - PermitRootLogin
+      ansible.builtin.command: grep "^PermitRootLogin no" /etc/ssh/sshd_config
+      register: ssh_root_check
+      changed_when: false
+      failed_when: false
+
+    - name: DRIFT DETECTED - SSH PermitRootLogin not hardened
+      ansible.builtin.debug:
+        msg: "DRIFT: PermitRootLogin is not set to 'no' on {{ inventory_hostname }}"
+      when: ssh_root_check.rc != 0
+
+    - name: Check SSH hardening - PasswordAuthentication
+      ansible.builtin.command: grep "^PasswordAuthentication no" /etc/ssh/sshd_config
+      register: ssh_pass_check
+      changed_when: false
+      failed_when: false
+
+    - name: DRIFT DETECTED - SSH PasswordAuthentication not hardened
+      ansible.builtin.debug:
+        msg: "DRIFT: PasswordAuthentication is not set to 'no' on {{ inventory_hostname }}"
+      when: ssh_pass_check.rc != 0
+
+    - name: Check auditd is running
+      ansible.builtin.systemd:
+        name: auditd
+      register: auditd_check
+      ignore_errors: yes
+
+    - name: DRIFT DETECTED - auditd not running
+      ansible.builtin.debug:
+        msg: "DRIFT: auditd is {{ auditd_check.status.ActiveState }} on {{ inventory_hostname }}"
+      when: auditd_check.status.ActiveState != "active"
+
+    - name: Drift detection complete
+      ansible.builtin.debug:
+        msg: "Drift detection scan complete on {{ inventory_hostname }}"

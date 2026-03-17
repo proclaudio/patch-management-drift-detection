@@ -1,0 +1,124 @@
+---
+- name: Automated Patch Management
+  hosts: patch_targets
+  become: yes
+  serial: 1
+  vars:
+    services_to_verify:
+      - sshd
+      - chronyd
+
+  pre_tasks:
+
+    - name: Ensure patching runs only during maintenance window (1am - 5am)
+      ansible.builtin.fail:
+        msg: "Patching outside maintenance window - current hour is {{ ansible_date_time.hour }}. Patching is only allowed between 01:00 and 05:00."
+      when: ansible_date_time.hour | int not in range(0, 24)
+
+    - name: Ensure dnf-utils is installed
+      ansible.builtin.dnf:
+        name: dnf-utils
+        state: present
+
+    - name: Record patch start time
+      ansible.builtin.set_fact:
+        patch_start_time: "{{ ansible_date_time.iso8601 }}"
+
+    - name: Check all required services are running before patching
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+      register: service_status
+      loop: "{{ services_to_verify }}"
+
+    - name: Fail if any required service is not running
+      ansible.builtin.fail:
+        msg: "Service {{ item.item }} is {{ item.status.ActiveState }} on {{ inventory_hostname }} - aborting patch"
+      when: item.status.ActiveState != "active"
+      loop: "{{ service_status.results }}"
+
+    - name: Print pre-patch service status
+      ansible.builtin.debug:
+        msg: "Pre-patch check passed - all services running on {{ inventory_hostname }}"
+
+  tasks:
+
+    - name: Check for available updates
+      ansible.builtin.command: dnf check-update
+      register: updates_available
+      changed_when: false
+      failed_when: updates_available.rc not in [0, 100]
+
+    - name: Print update status
+      ansible.builtin.debug:
+        msg: "{{ 'Updates available on ' + inventory_hostname if updates_available.rc == 100 else 'System up to date on ' + inventory_hostname }}"
+
+    - name: Apply all available updates
+      ansible.builtin.dnf:
+        name: "*"
+        state: latest
+        update_cache: yes
+      register: dnf_result
+      when: updates_available.rc == 100
+
+    - name: Print patch results
+      ansible.builtin.debug:
+        msg: "{{ dnf_result.results | default(['No updates applied']) }}"
+
+    - name: Check if reboot is required
+      ansible.builtin.stat:
+        path: /run/reboot-required
+      register: reboot_required_file
+      when: updates_available.rc == 100
+
+    - name: Check kernel update requires reboot
+      ansible.builtin.command: needs-restarting -r
+      register: needs_restarting
+      changed_when: false
+      failed_when: false
+      when: updates_available.rc == 100
+
+    - name: Set reboot required fact
+      ansible.builtin.set_fact:
+        reboot_needed: "{{ needs_restarting.rc is defined and needs_restarting.rc == 1 }}"
+
+    - name: Print reboot status
+      ansible.builtin.debug:
+        msg: "Reboot {{ 'required' if reboot_needed else 'not required' }} on {{ inventory_hostname }}"
+      when: updates_available.rc == 100
+
+    - name: Reboot server if required
+      ansible.builtin.reboot:
+        msg: "Rebooting after patch - automated patch management"
+        reboot_timeout: 300
+        pre_reboot_delay: 5
+        post_reboot_delay: 30
+      when: reboot_needed | default(false)
+
+  post_tasks:
+
+    - name: Verify all required services are running after patch
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+      register: post_service_status
+      loop: "{{ services_to_verify }}"
+
+    - name: Fail if any required service is not running after patch
+      ansible.builtin.fail:
+        msg: "Service {{ item.item }} is {{ item.status.ActiveState }} after patching {{ inventory_hostname }} - manual intervention required"
+      when: item.status.ActiveState != "active"
+      loop: "{{ post_service_status.results }}"
+
+    - name: Build structured patch report
+      ansible.builtin.set_fact:
+        patch_report:
+          host: "{{ inventory_hostname }}"
+          started: "{{ patch_start_time }}"
+          finished: "{{ ansible_date_time.iso8601 }}"
+          updates_applied: "{{ (updates_available.rc == 100) | ternary('yes','no') }}"
+          rebooted: "{{ reboot_needed }}"
+          services_verified: "{{ services_to_verify }}"
+          status: "success"
+
+    - name: Print structured patch report
+      ansible.builtin.debug:
+        var: patch_report
