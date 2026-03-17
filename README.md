@@ -1,14 +1,12 @@
 # Patch Management + Drift Detection
 
 Automated patch management and configuration drift detection across a
-Rocky Linux lab environment. Implements enterprise-grade patching workflow
-with pre-flight checks, controlled reboots, and post-patch verification.
-Drift detection runs on a daily AWX schedule to ensure all servers remain
-compliant with the configured baseline.
+Rocky Linux lab environment.
 
 ---
 
 ## Architecture
+
 ```mermaid
 flowchart TD
     A[AWX Scheduled Job] --> B{Workflow Type}
@@ -44,7 +42,6 @@ flowchart TD
 ## Patch Targets
 
 Production servers are excluded from automated patching.
-Only development and staging servers are patched automatically.
 
 | Host         | Environment | Patched          |
 | ------------ | ----------- | ---------------- |
@@ -54,82 +51,25 @@ Only development and staging servers are patched automatically.
 
 ---
 
-## Patching Workflow
-```
-Pre-flight check (verify all services running)
-       |
-       v
-dnf check-update
-       |
-       v
-dnf update (if updates available)
-       |
-       v
-needs-restarting -r (check if reboot required)
-       |
-       v
-Controlled reboot (if required, 300s timeout)
-       |
-       v
-Post-flight check (verify all services running)
-       |
-       v
-Structured patch report (host, times, updates, reboot, status)
-```
-
-Key design decisions:
-- serial: 1 patches one server at a time (rolling update)
-- Maintenance window guard aborts patching outside 01:00-05:00
-- Pre-flight check aborts if any service is down before patching
-- Post-flight check alerts if any service fails after patching
-- Conditional reboot only when needs-restarting confirms it
-- dnf-utils installed automatically as pre-task
-
----
-
 ## Drift Detection
 
-Scans all 5 servers daily for configuration drift from the baseline:
+Scans all 5 servers daily for configuration drift:
 
 | Check | Expected State |
 | ----- | -------------- |
-| node_exporter binary | Present at /usr/local/bin/node_exporter |
+| node_exporter binary | Present |
 | node_exporter service | active (running) |
 | SSH PermitRootLogin | no |
 | SSH PasswordAuthentication | no |
 | auditd service | active (running) |
 
-Any deviation produces a DRIFT DETECTED message in AWX output,
-identifying exactly which server and which control has drifted.
-
 ---
 
 ## AWX Schedule
 
-Drift detection runs automatically every 24 hours:
-
 - Job: Drift Detection
 - Schedule: Daily at 02:00 AM
 - Targets: All 5 lab servers
-
----
-
-## Screenshots
-
-### AWX Patch Job Template
-![Patch Template](screenshots/awx-patch-template.png)
-
-### Patch Job Running
-![Patch Job](screenshots/awx-patch-job.png)
-
-### Patch Complete with Summary
-![Patch Complete](screenshots/awx-patch-complete.png)
-
-### Daily Drift Check Schedule
-![Drift Schedule](screenshots/awx-drift-schedule.png)
-
-### Drift Detection Output
-![Drift Output](screenshots/awx-drift-output.png)
 
 ---
 
@@ -139,7 +79,7 @@ Drift detection runs automatically every 24 hours:
 - Rolling update strategy (serial: 1)
 - Maintenance window enforcement
 - Pre-flight and post-flight service verification
-- Conditional reboot logic (only when required)
+- Conditional reboot logic
 - Structured patch reporting with human-readable output
 - Configuration drift detection across 5 servers
 - AWX job scheduling for automated compliance
